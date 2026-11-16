@@ -51,6 +51,7 @@ jobs:
           fi
           git push --dry-run "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
 
+      - name: Merge the newest upstream release
         id: merge
         env:
           GH_TOKEN: ${{ github.token }}
