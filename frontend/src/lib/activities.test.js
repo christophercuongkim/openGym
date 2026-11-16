@@ -142,20 +142,27 @@ describe('activities: imports', () => {
       '106,"Oct 10, 2026, 12:30:00 PM",Gravel,E-Bike Ride,,3600,30.00,,,3600.0,3500.0,30000.0',
       '107,"Oct 11, 2026, 12:30:00 PM",Too short,Run,,120,0.30,,,120.0,120.0,300.0',
       '108,not a date,Broken,Run,,1800,5.00,,,1800.0,1800.0,5000.0',
+      '109,"Oct 12, 2026, 6:00:00 AM",Treadmill,Run,"5 km\nLogged with openGym",1800,5.00,,,1800.0,1800.0,5000.0',
+      '110,"Oct 13, 2026, 6:00:00 AM",Zwift - Run,Virtual Run,,1800,5.00,,,1800.0,1800.0,5000.0',
+      '111,"Oct 14, 2026, 6:00:00 AM",Gym wall,Rock Climbing,,3600,0.00,,,3600.0,3600.0,0.0',
     ].join('\n')
     const parsed = parseImport(csv, { unit: 'kg' })
     expect(parsed.kind).toBe('bodyweight')
     expect(parsed.source).toBe('Strava')
     expect(parsed.bodyweight).toEqual([])
     expect(parsed.activities.map(a => [a.sport, a.min, a.km ?? null, a.title])).toEqual([
-      ['run', 43, 8.2, 'Morning Run'], ['racket', 90, null, 'Tennis, with Tom'], ['ride', 60, 30, 'Gravel'],
+      ['run', 43, 8.2, 'Morning Run'], ['racket', 90, null, 'Tennis, with Tom'], ['ride', 60, 30, 'Gravel'], ['climb', 60, null, 'Gym wall'],
     ])
     // the export's times are UTC
     expect(parsed.activities[0].at).toBe(Date.UTC(2026, 9, 5, 5, 0, 0))
     expect(parsed.activities[2].at).toBe(Date.UTC(2026, 9, 10, 12, 30, 0))
     const S = { workouts: [], bodyweight: [], customEx: [], exWeights: {} }
-    expect(mergeImport(S, parsed).activities).toBe(3)
+    expect(mergeImport(S, parsed).activities).toBe(4)
     expect(mergeImport(S, parsed).activities).toBe(0)
+    // a run over a workout logged here is that workout, sent to Strava by openGym or by a watch
+    const run = Date.UTC(2026, 9, 5, 5, 0, 0)
+    const G = { workouts: [{ id: 'w1', d: '2026-10-05', start: run - 60e3, end: run + 40 * 60e3, entries: [] }], bodyweight: [], customEx: [], exWeights: {} }
+    expect(mergeImport(G, parsed).activities).toBe(3)
     // a workout history that happens to have a date column is still a workout history
     expect(activitiesFromStravaExport([['Date', 'Workout Name', 'Exercise Name'], ['2026-10-05', 'Push', 'Bench']])).toEqual([])
   })

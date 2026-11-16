@@ -160,7 +160,8 @@ zip file. Unzip it and pick `activities.csv` under **Import from another app**.
 Runs, rides, swims, hikes and matches come in as activities, with their day, minutes, distance and
 name: they show in History and the calendar and tire the right muscles, and they are not workouts.
 Weight training, walks and indoor cardio are left out, the way the Apple Health and Health Connect
-read leaves them out; a plain "Workout" comes in only when its name says a sport. The file's times
+read leaves them out, and so is anything openGym uploaded to Strava itself or that sits over a
+workout logged here. A plain "Workout" comes in only when its name says a sport. The file's times
 are UTC, so each activity lands on the day it started on this device's clock.
 
 Importing the same file twice adds nothing. A session that is already there from Apple Health or

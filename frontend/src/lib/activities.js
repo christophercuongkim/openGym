@@ -214,14 +214,17 @@ export function activityFromHealth(rec, S, src, now = Date.now()) {
 // store, or a run that came in from a file and is then read from the store. Same sport, started
 // within five minutes. Ids differ between sources, so the id alone does not catch it.
 const SAME_START_MS = 5 * 60e3
-function hasSession(map, a) {
-  if (!(a.at > 0)) return false
+// The starts already in the map, per sport, read once for a whole merge (a file can hold thousands).
+function sessionStarts(map) {
+  const by = {}
   for (const e of Object.values(map)) {
     const b = readActivity(e)
-    if (b && b.sport === a.sport && b.at > 0 && Math.abs(b.at - a.at) < SAME_START_MS) return true
+    if (b && b.at > 0) (by[b.sport] ||= []).push(b.at)
   }
-  return false
+  return by
 }
+const hasSession = (by, a) => a.at > 0 && (by[a.sport] || []).some(at => Math.abs(at - a.at) < SAME_START_MS)
+const noteSession = (by, a) => { if (a.at > 0) (by[a.sport] ||= []).push(a.at) }
 
 /**
  * Health-store workouts into S.activities (mutates S): new ones added, nothing removed, a removed one
@@ -230,13 +233,14 @@ function hasSession(map, a) {
  */
 export function mergeHealthActivities(S, records, { src, now = Date.now() } = {}) {
   const map = isMap(S.activities) ? S.activities : {}
-  const added = []
+  const added = [], starts = sessionStarts(map)
   for (const rec of Array.isArray(records) ? records : []) {
     const a = activityFromHealth(rec, S, src, now)
     if (!a) continue
     const id = healthActivityId(rec, src)
-    if (Object.hasOwn(map, id) || hasSession(map, a)) continue
+    if (Object.hasOwn(map, id) || hasSession(starts, a)) continue
     map[id] = { ...a, _ts: now }
+    noteSession(starts, a)
     added.push(id)
   }
   if (added.length) S.activities = map
@@ -332,14 +336,19 @@ export function activitiesFromHealthExport(text) {
 // Strava's export (strava.com → Settings → My Account → Download or Delete Your Account → Request
 // Your Archive) names each activity's type in words, in `activities.csv`. To the native names above;
 // the indoor ones are gym cardio like everywhere else, and a type not listed is 'other'.
+// Strava spells a type one way on its site and another in its API ("Rock Climb", "RockClimbing"),
+// and which one an archive carries has changed over the years: both are here.
 const STRAVA_SPORT = {
   run: 'run', trailrun: 'run', ride: 'ride', mountainbikeride: 'ride', gravelride: 'ride', ebikeride: 'ride',
-  emountainbikeride: 'ride', handcycle: 'ride', velomobile: 'ride', swim: 'swim', surf: 'swim', windsurf: 'swim',
-  kitesurf: 'swim', hike: 'hike', rowing: 'row', kayaking: 'row', canoeing: 'row', standuppaddling: 'row', sail: 'row',
-  alpineski: 'ski', backcountryski: 'ski', nordicski: 'ski', rollerski: 'ski', snowboard: 'ski', snowshoe: 'ski',
-  iceskate: 'ski', soccer: 'football', football: 'football', tennis: 'racket', badminton: 'racket', squash: 'racket',
-  tabletennis: 'racket', pickleball: 'racket', racquetball: 'racket', padel: 'racket', basketball: 'ball',
-  volleyball: 'ball', rockclimb: 'climb', yoga: 'yoga', pilates: 'yoga', dance: 'dance', walk: 'walk',
+  emountainbikeride: 'ride', handcycle: 'ride', velomobile: 'ride', swim: 'swim', surf: 'swim', surfing: 'swim',
+  windsurf: 'swim', windsurfing: 'swim', kitesurf: 'swim', kitesurfing: 'swim', hike: 'hike', rowing: 'row',
+  kayaking: 'row', kayak: 'row', canoeing: 'row', canoe: 'row', standuppaddling: 'row', standuppaddle: 'row',
+  sail: 'row', sailing: 'row', alpineski: 'ski', backcountryski: 'ski', nordicski: 'ski', rollerski: 'ski',
+  snowboard: 'ski', snowboarding: 'ski', snowshoe: 'ski', iceskate: 'ski', iceskating: 'ski', inlineskate: 'ski',
+  soccer: 'football', football: 'football', footballsoccer: 'football', tennis: 'racket', badminton: 'racket',
+  squash: 'racket', tabletennis: 'racket', pickleball: 'racket', racquetball: 'racket', padel: 'racket',
+  basketball: 'ball', volleyball: 'ball', rugby: 'ball', hockey: 'ball', rockclimb: 'climb', rockclimbing: 'climb',
+  yoga: 'yoga', pilates: 'yoga', dance: 'dance', walk: 'walk',
   weighttraining: 'strength', crossfit: 'strength', workout: 'gym', elliptical: 'gym', stairstepper: 'gym',
   highintensityintervaltraining: 'gym', hiit: 'gym', virtualride: 'gym', virtualrun: 'gym', virtualrow: 'gym',
 }
@@ -362,8 +371,8 @@ export const isStravaExport = header => ['Activity ID', 'Activity Date', 'Activi
 /**
  * The rows of Strava's `activities.csv` (header first, as lib/import-csv.js parseCSV reads them)
  * that are sport, as activities to import: [{ id, d, sport, min, km?, at, title?, src: 'import' }].
- * Strength, gym cardio and walks are left out, like the live read does; a plain "Workout" comes in
- * only when its name says a sport ("Basketball with Tom"). The day is the start on this device's
+ * Strength, gym cardio, walks and openGym's own uploads are left out, like the live read does; a
+ * plain "Workout" comes in only when its name says a sport ("Basketball with Tom"). The day is the start on this device's
  * clock, the minutes the elapsed time, start to end, as the health store has them.
  */
 export function activitiesFromStravaExport(rows) {
@@ -376,9 +385,13 @@ export function activitiesFromStravaExport(rows) {
   const out = []
   for (const r of rows.slice(1)) {
     const title = String(r[col('Activity Name')] ?? '')
-    let sport = stravaSportName(r[col('Activity Type')])
-    if (sport === 'gym') sport = sportOfName(title) || sport
+    const type = String(r[col('Activity Type')] ?? '')
+    let sport = stravaSportName(type)
+    // Strava's catch-all type, where a match or a class ends up: its name may say the sport.
+    if (/^\s*workout\s*$/i.test(type)) sport = sportOfName(title) || sport
     if (NOT_ACTIVITY.has(sport)) continue
+    // A workout openGym sent to Strava itself (api/integrations/providers/strava.js signs them).
+    if (/logged with opengym/i.test(String(r[col('Activity Description')] ?? ''))) continue
     const start = stravaStart(r[col('Activity Date')])
     if (!Number.isFinite(start)) continue
     const dist = Number(r[col('Distance')])
@@ -418,15 +431,22 @@ export function splitSportWorkouts(workouts, nameOf) {
   return { workouts: keep, activities }
 }
 
-/** Imported activities into S.activities (mutates S): one already here (by its id, or as the same session from another source) or removed is left alone. Returns how many came in. */
+/**
+ * Imported activities into S.activities (mutates S): one already here (by its id, or as the same
+ * session from another source) or removed is left alone, and so is one over a workout logged here
+ * (a treadmill run openGym sent to the other app itself). Returns how many came in.
+ */
 export function mergeImportedActivities(S, list, now = Date.now()) {
   const map = isMap(S.activities) ? S.activities : {}
+  const starts = sessionStarts(map)
   let n = 0
   for (const { id, ...a } of Array.isArray(list) ? list : []) {
     if (!id || Object.hasOwn(map, id)) continue
     const clean = readActivity(a)
-    if (!clean || hasSession(map, clean)) continue
+    if (!clean || hasSession(starts, clean)) continue
+    if (clean.at > 0 && overlapsWorkout(S, clean.at, clean.at + clean.min * 60e3)) continue
     map[id] = { ...clean, _ts: now }
+    noteSession(starts, clean)
     n++
   }
   if (n) S.activities = map
