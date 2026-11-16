@@ -1,0 +1,88 @@
+name: Sync with upstream releases
+
+# Fork only (christophercuongkim/openGym). The box at gym.chriskim.cloud runs
+# the images built from this fork's main, so main has to follow upstream or the
+# box stops getting its fixes. Once a day this merges upstream's newest release
+# into main. The push starts "Publish Docker images" and "Tests" like any other.
+#
+# SYNC_TOKEN is a fine-grained token for this repository with Contents and
+# Workflows write. The built-in token cannot do this job: it may not push
+# changes to workflow files, which most releases contain, and a push made with
+# it starts no other workflow, so no images would be built.
+#
+# A merge conflict with a fork-only change, or a failing api test, stops the
+# run before anything is pushed. GitHub mails the owner about the failed run.
+on:
+  schedule:
+    - cron: '17 6 * * *' # before the box's 09:00 UTC pull, with time for the image build
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'christophercuongkim/openGym'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          # The token is handed to the push step alone, so the tests below
+          # run upstream's code without a write credential in the workspace.
+          persist-credentials: false
+
+      # Every day, not only when there is a release to push: an expired or
+      # missing token then fails a quiet run, days before it would block one.
+      # A dry run authenticates for writing and changes nothing.
+      - name: The token can still push
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::the SYNC_TOKEN secret is missing or empty"
+            exit 1
+          fi
+          git push --dry-run "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+
+        id: merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag=$(gh api repos/DuarteSantos8/openGym/releases/latest -q .tag_name)
+          # Into FETCH_HEAD, not a local tag: a tag upstream moved would
+          # otherwise be refused as a clobber, every day.
+          git fetch --no-tags https://github.com/DuarteSantos8/openGym.git "refs/tags/$tag"
+          if git merge-base --is-ancestor 'FETCH_HEAD^{commit}' HEAD; then
+            echo "main already has $tag"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-edit -m "Merge upstream release $tag" FETCH_HEAD
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.merge.outputs.tag
+        with:
+          node-version: 26 # what test.yml and the images use
+
+      # The release itself passed upstream's tests. What is new here is the
+      # merge with the fork's own changes, which so far all live in api/.
+      - name: api tests on the merged tree
+        if: steps.merge.outputs.tag
+        run: cd api && npm ci --ignore-scripts && npm test
+
+      - name: Push
+        if: steps.merge.outputs.tag
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          git push "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
