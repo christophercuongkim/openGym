@@ -34,7 +34,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.SYNC_TOKEN }}
+          # The token is handed to the push step alone, so the tests below
+          # run upstream's code without a write credential in the workspace.
+          persist-credentials: false
 
       - name: Merge the newest upstream release
         id: merge
@@ -43,27 +45,36 @@ jobs:
         run: |
           set -eu
           tag=$(gh api repos/DuarteSantos8/openGym/releases/latest -q .tag_name)
-          git fetch --no-tags https://github.com/DuarteSantos8/openGym.git "refs/tags/$tag:refs/tags/$tag"
-          if git merge-base --is-ancestor "$tag" HEAD; then
+          # Into FETCH_HEAD, not a local tag: a tag upstream moved would
+          # otherwise be refused as a clobber, every day.
+          git fetch --no-tags https://github.com/DuarteSantos8/openGym.git "refs/tags/$tag"
+          if git merge-base --is-ancestor 'FETCH_HEAD^{commit}' HEAD; then
             echo "main already has $tag"
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-edit -m "Merge upstream release $tag" "$tag"
+          git merge --no-edit -m "Merge upstream release $tag" FETCH_HEAD
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.merge.outputs.tag
         with:
-          node-version: 22
+          node-version: 26 # what test.yml and the images use
 
       # The release itself passed upstream's tests. What is new here is the
       # merge with the fork's own changes, which so far all live in api/.
       - name: api tests on the merged tree
         if: steps.merge.outputs.tag
-        run: cd api && npm ci && npm test
+        run: cd api && npm ci --ignore-scripts && npm test
 
       - name: Push
         if: steps.merge.outputs.tag
-        run: git push origin HEAD:main
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::the SYNC_TOKEN secret is missing or empty, so the merge cannot be pushed"
+            exit 1
+          fi
+          git push "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
