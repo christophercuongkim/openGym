@@ -38,7 +38,19 @@ jobs:
           # run upstream's code without a write credential in the workspace.
           persist-credentials: false
 
-      - name: Merge the newest upstream release
+      # Every day, not only when there is a release to push: an expired or
+      # missing token then fails a quiet run, days before it would block one.
+      # A dry run authenticates for writing and changes nothing.
+      - name: The token can still push
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::the SYNC_TOKEN secret is missing or empty"
+            exit 1
+          fi
+          git push --dry-run "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
+
         id: merge
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,8 +85,4 @@ jobs:
         env:
           SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
         run: |
-          if [ -z "$SYNC_TOKEN" ]; then
-            echo "::error::the SYNC_TOKEN secret is missing or empty, so the merge cannot be pushed"
-            exit 1
-          fi
           git push "https://x-access-token:$SYNC_TOKEN@github.com/${GITHUB_REPOSITORY}.git" HEAD:main
